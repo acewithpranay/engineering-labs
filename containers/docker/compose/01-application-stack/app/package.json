@@ -1,0 +1,14 @@
+{
+    "name": "compose-lab-01-api",
+    "version": "1.0.0",
+    "private": true,
+    "description": "Docker Compose Lab 01 API",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js"
+    },
+    "dependencies": {
+        "express": "^5.1.0",
+        "pg": "^8.16.3"
+    }
+}
