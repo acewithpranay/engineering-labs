@@ -2,16 +2,22 @@
 
 ## Objective
 
-Build and operate a small multi-container application using Docker Compose.
+I built and operated a small multi-container application using Docker Compose to understand how an application architecture is translated into a `compose.yaml` and how the resulting stack behaves at runtime.
 
-The purpose of this lab is not simply to run multiple containers. The focus is on understanding how to design and write a `compose.yaml` from an application architecture, validate the configuration, operate the stack, troubleshoot failures, and understand the relationship between services, networking, health checks, and persistent storage.
+The lab focused on:
 
-The stack consists of:
+* writing Compose YAML from an application architecture
+* defining multiple services
+* building an application image
+* running an existing PostgreSQL image
+* configuring service-to-service communication
+* using Compose service discovery
+* managing persistent storage
+* implementing healthchecks
+* controlling service startup dependencies
+* validating and troubleshooting the Compose configuration
 
-* Node.js API
-* PostgreSQL 18
-* Docker Compose-managed networking
-* Persistent PostgreSQL storage
+The application consists of a Node.js API and PostgreSQL 18.
 
 ---
 
@@ -42,26 +48,9 @@ The stack consists of:
               +----------------+
 ```
 
-Only the API is exposed to the host.
+The API is the only service exposed to the host.
 
-PostgreSQL is intentionally not published to the host because it is an internal dependency of the API.
-
----
-
-## Repository Structure
-
-```text
-01-application-stack/
-├── app/
-│   ├── package.json
-│   ├── package-lock.json
-│   └── server.js
-├── .dockerignore
-├── .gitignore
-├── compose.yaml
-├── Dockerfile
-└── README.md
-```
+PostgreSQL remains internal to the Compose application because the API is its only consumer.
 
 ---
 
@@ -71,16 +60,16 @@ The lab was performed on:
 
 * OS: Ubuntu 24.04.4 LTS
 * Platform: AWS EC2
-* Docker version: `Docker version 29.7.2, build a7dcaa6`
-* Docker Compose version: `v5.4.0`
+* Docker: `29.7.2`
+* Docker Compose: `v5.4.0`
 
 ---
 
 ## Application
 
-The application is a small Node.js API built with Express and PostgreSQL.
+I used a small Node.js API built with Express and the PostgreSQL client.
 
-The API provides three endpoints:
+The API exposes three endpoints:
 
 ```text
 GET /
@@ -90,25 +79,35 @@ GET /db
 
 ### `/`
 
-Used to verify that the API is reachable.
+I used this endpoint to verify basic API reachability.
 
 ### `/health`
 
-Checks both the API and PostgreSQL connectivity.
+This endpoint performs a database connectivity check and returns a healthy response only when PostgreSQL is reachable.
 
-The endpoint returns a healthy status only when the API can successfully communicate with PostgreSQL.
+This allowed me to distinguish between:
+
+```text
+API container is running
+```
+
+and:
+
+```text
+API and its database dependency are actually working
+```
 
 ### `/db`
 
-Executes a PostgreSQL query and returns database information.
+This endpoint executes a PostgreSQL query and returns the connected database and server time.
 
-This endpoint is used to verify that communication between the API and PostgreSQL is actually working rather than simply verifying that both containers are running.
+I used it to verify actual application-to-database communication.
 
 ---
 
-# Compose Design
+## Compose Design
 
-The Compose application contains two services:
+I defined two services:
 
 ```text
 services
@@ -116,35 +115,34 @@ services
 └── postgres
 ```
 
-## API service
+### API
 
-The API:
+The API service:
 
-* is built locally using the Dockerfile
+* is built locally from the Dockerfile
 * listens on container port `3000`
 * publishes host port `8080`
-* receives database configuration through environment variables
-* depends on PostgreSQL
-* uses a PostgreSQL healthcheck as the dependency condition
+* receives PostgreSQL connection details through environment variables
+* depends on PostgreSQL being healthy
 * has its own healthcheck
 * uses `restart: unless-stopped`
 
-## PostgreSQL service
+### PostgreSQL
 
-PostgreSQL:
+The PostgreSQL service:
 
-* uses the official PostgreSQL 18 Alpine image
+* uses `postgres:18-alpine`
 * initializes the application database and user
-* stores data in a named Docker volume
+* uses a named volume for persistent storage
 * has a PostgreSQL healthcheck
 * uses `restart: unless-stopped`
-* is not exposed directly to the host
+* does not publish port `5432` to the host
 
 ---
 
-# YAML / Compose Concepts Practiced
+## Compose Configuration
 
-This lab was used to practice writing the following Compose structure:
+The resulting Compose structure is:
 
 ```yaml
 services:
@@ -166,272 +164,144 @@ services:
 volumes:
 ```
 
-The main YAML concepts practiced were:
-
-* mappings
-* nested mappings
-* sequences
-* indentation
-* quoting
-* hierarchical configuration
-* service-level configuration
-* top-level resources
-
-The main Compose concepts practiced were:
-
-* `services`
-* `build`
-* `image`
-* `ports`
-* `environment`
-* `volumes`
-* `depends_on`
-* `healthcheck`
-* `restart`
-* service-to-service DNS
-* named volumes
-* Compose project resources
+This lab gave me practical experience with YAML mappings, nesting, sequences, indentation, quoting, and hierarchical configuration while applying those concepts to the Compose service model.
 
 ---
 
 # Validation
 
-Before starting the application, the Compose configuration was validated with:
+Before starting the stack, I validated the Compose configuration with:
 
 ```bash
 docker compose config
 ```
 
-Result:
+The configuration rendered successfully.
 
-```text
-name: 01-application-stack
-services:
-  api:
-    build:
-      context: /home/ubuntu/01-application-stack
-      dockerfile: Dockerfile
-    depends_on:
-      postgres:
-        condition: service_healthy
-        required: true
-    environment:
-      DB_HOST: postgres
-      DB_NAME: compose_lab
-      DB_PASSWORD: compose_password
-      DB_PORT: "5432"
-      DB_USER: compose
-      PORT: "3000"
-    healthcheck:
-      test:
-        - CMD
-        - node
-        - -e
-        - 'require(''http'').get(''http://127.0.0.1:3000/health'', (res) => process.exit(res.statusCode
-          === 200 ? 0 : 1)).on(''error'', () => process.exit(1))'
-      timeout: 5s
-      interval: 10s
-      retries: 5
-      start_period: 10s
-    networks:
-      default: null
-    ports:
-      - mode: ingress
-        target: 3000
-        published: "8080"
-        protocol: tcp
-    restart: unless-stopped
-  postgres:
-    environment:
-      POSTGRES_DB: compose_lab
-      POSTGRES_PASSWORD: compose_password
-      POSTGRES_USER: compose
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - pg_isready -U compose -d compose_lab
-      timeout: 5s
-      interval: 10s
-      retries: 5
-      start_period: 10s
-    image: postgres:18-alpine
-    networks:
-      default: null
-    restart: unless-stopped
-    volumes:
-      - type: volume
-        source: postgres_data
-        target: /var/lib/postgresql
-        volume: {}
-networks:
-  default:
-    name: 01-application-stack_default
-volumes:
-  postgres_data:
-    name: 01-application-stack_postgres_data
-```
+The resolved configuration confirmed that Compose generated:
 
-The purpose of this step was to validate the Compose configuration before relying on runtime behavior.
+* the `api` service
+* the `postgres` service
+* the default Compose network
+* the `postgres_data` named volume
+* the configured port mapping
+* the healthchecks
+* the `service_healthy` dependency condition
+
+This gave me confidence that the YAML structure was valid before moving to runtime testing.
 
 ---
 
-# Implementation
+# Experiments and Findings
 
-## Build and Start
+## 1. Application Startup
 
-The stack was built and started using:
+I started the application with:
 
 ```bash
 docker compose up --build -d
 ```
 
-This resulted in Compose:
+Compose built the API image, pulled PostgreSQL 18, created the network and volume, and eventually started both services successfully.
 
-1. pulling the PostgreSQL image
-2. building the API image
-3. creating the Compose network
-4. creating the PostgreSQL named volume
-5. creating the service containers
-6. starting PostgreSQL
-7. evaluating the PostgreSQL health status
-8. starting the API after the dependency condition was satisfied
-
-Actual result after the final fix:
+The final state was:
 
 ```text
-[+] Building 0.5s (12/12) FINISHED                                                                                                                                                  
- => [internal] load local bake definitions                                                                                                                                     0.0s
- => => reading from stdin 532B                                                                                                                                                 0.0s
- => [internal] load build definition from Dockerfile                                                                                                                           0.0s
- => => transferring dockerfile: 200B                                                                                                                                           0.0s
- => [internal] load metadata for docker.io/library/node:22-alpine                                                                                                              0.1s
- => [internal] load .dockerignore                                                                                                                                              0.0s
- => => transferring context: 2B                                                                                                                                                0.0s
- => [1/5] FROM docker.io/library/node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32                                                        0.0s
- => => resolve docker.io/library/node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32                                                        0.0s
- => [internal] load build context                                                                                                                                              0.0s
- => => transferring context: 136B                                                                                                                                              0.0s
- => CACHED [2/5] WORKDIR /app                                                                                                                                                  0.0s
- => CACHED [3/5] COPY app/package*.json ./                                                                                                                                     0.0s
- => CACHED [4/5] RUN npm ci --omit=dev                                                                                                                                         0.0s
- => CACHED [5/5] COPY app/server.js ./                                                                                                                                         0.0s
- => exporting to image                                                                                                                                                         0.1s
- => => exporting layers                                                                                                                                                        0.0s
- => => exporting manifest sha256:a1a268871a8fe43b82a95786365b8f041aaad16d18b93e9943b20340b809c1df                                                                              0.0s
- => => exporting config sha256:c4129895bdda2dacf0c74dcd6b2b13de24eef6c4145852bc69dddece0c53f1a6                                                                                0.0s
- => => exporting attestation manifest sha256:e9b35bd75321696119dd7d9890a5c4f7e290000f6ba075e00a334285dae3896e                                                                  0.0s
- => => exporting manifest list sha256:01222c671c49d11a2ad75b08f3218f03a715e75cb20f0846821194f9a6c33386                                                                         0.0s
- => => naming to docker.io/library/01-application-stack-api:latest                                                                                                             0.0s
- => => unpacking to docker.io/library/01-application-stack-api:latest                                                                                                          0.0s
- => resolving provenance for metadata file                                                                                                                                     0.0s
-[+] up 5/5
- ✔ Image 01-application-stack-api            Built                                                                                                                              0.6s
- ✔ Network 01-application-stack_default      Created                                                                                                                            0.1s
- ✔ Volume 01-application-stack_postgres_data Created                                                                                                                            0.0s
- ✔ Container 01-application-stack-postgres-1 Healthy                                                                                                                            5.9s
- ✔ Container 01-application-stack-api-1      Started                                                                                                                            6.0s
+NAME                              SERVICE    STATUS
+01-application-stack-api-1        api        Up (healthy)
+01-application-stack-postgres-1   postgres   Up (healthy)
 ```
+
+The API was published as:
+
+```text
+0.0.0.0:8080 -> 3000/tcp
+```
+
+while PostgreSQL remained internal to the Compose network.
+
+### Finding
+
+Compose allowed the complete application topology to be created and managed as a single application rather than requiring separate container lifecycle commands.
 
 ---
 
-# Experiments
+## 2. API Connectivity
 
-## Experiment 1 — Compose Application Startup
-
-### Command
-
-```bash
-docker compose up --build -d
-```
-
-### Verification
-
-```bash
-docker compose ps
-```
-
-### Observation
-
-```text
-NAME                              IMAGE                      COMMAND                  SERVICE    CREATED         STATUS                   PORTS
-01-application-stack-api-1        01-application-stack-api   "docker-entrypoint.s…"   api        3 minutes ago   Up 3 minutes (healthy)   0.0.0.0:8080->3000/tcp, [::]:8080->3000/tcp
-01-application-stack-postgres-1   postgres:18-alpine         "docker-entrypoint.s…"   postgres   3 minutes ago   Up 3 minutes (healthy)   5432/tcp
-```
-
-### Conclusion
-
-The Compose file can define the application as a group of services and allow the complete stack to be created and started using a single command.
-
----
-
-## Experiment 2 — API Connectivity
-
-### Command
+I verified external connectivity with:
 
 ```bash
 curl http://localhost:8080/
 ```
 
-### Observation
+The API returned:
 
-```text
+```json
 {"application":"compose-lab-01-api","status":"running"}
 ```
 
-### Conclusion
+### Finding
 
-The host can reach the API through the published port mapping:
+The host reaches the application through the published port mapping:
 
 ```text
 Host :8080
-    |
-    v
-API container :3000
+     |
+     v
+API :3000
 ```
+
+No PostgreSQL port was required on the host.
 
 ---
 
-## Experiment 3 — Application Health
+## 3. Application Health
 
-### Command
+I tested:
 
 ```bash
 curl http://localhost:8080/health
 ```
 
-### Observation
+The API returned:
 
-```text
+```json
 {"status":"healthy","database":"reachable"}
 ```
 
-### Conclusion
+### Finding
 
-The health endpoint verifies more than container availability. It verifies that the API can communicate with PostgreSQL.
+The health endpoint provided a more meaningful signal than simply checking whether the API container was running.
+
+The API was considered healthy only after it could successfully communicate with PostgreSQL.
 
 ---
 
-## Experiment 4 — Database Connectivity
+## 4. Database Connectivity
 
-### Command
+I tested:
 
 ```bash
 curl http://localhost:8080/db
 ```
 
-### Observation
+The API returned:
 
-```text
-{"status":"connected","database":"compose_lab","server_time":"2026-08-11T13:58:35.115Z"}
+```json
+{
+  "status":"connected",
+  "database":"compose_lab",
+  "server_time":"2026-08-11T13:58:35.115Z"
+}
 ```
 
-### Conclusion
+### Finding
 
-The API successfully communicates with PostgreSQL through the Compose network.
+The API successfully communicated with PostgreSQL over the Compose network.
 
-The API does not need the PostgreSQL container IP address.
+The application did not need to know PostgreSQL's container IP address.
 
-It uses the Compose service name:
+Instead, it used:
 
 ```text
 postgres
@@ -439,112 +309,86 @@ postgres
 
 as the database hostname.
 
+This reinforced an important Compose networking principle: service names are the stable application-level reference, while container IP addresses are implementation details.
+
 ---
 
-## Experiment 5 — Compose Service DNS
+## 5. Compose Service Discovery
 
-### Command
+I entered the API container:
 
 ```bash
 docker compose exec api sh
 ```
 
-Then:
+and resolved the PostgreSQL service:
 
 ```bash
 getent hosts postgres
 ```
 
-### Observation
+The result included:
 
 ```text
-/app $ getent hosts postgres
-172.18.0.2        postgres  postgres
+172.18.0.2    postgres
 ```
 
-### Conclusion
+### Finding
 
-The API container can resolve the PostgreSQL service using the Compose service name.
+The API container could resolve PostgreSQL through the Compose service name.
 
-This demonstrates why applications should reference other Compose services by service name rather than relying on container IP addresses.
+This confirmed that Compose networking provides service discovery without requiring static IP configuration.
 
 ---
 
 # Persistent Storage Investigation
 
-PostgreSQL data was configured using a named Docker volume:
+PostgreSQL uses a named volume:
 
 ```yaml
 volumes:
   - postgres_data:/var/lib/postgresql
 ```
 
-The purpose of this configuration is to keep database data outside the lifecycle of the PostgreSQL container.
+I specifically used a named volume because database data must not depend on the lifecycle of an individual PostgreSQL container.
 
 ---
 
-## Experiment 6 — Container Recreation
+## 6. Container Recreation
 
-### Steps
+I tested:
 
 ```bash
 docker compose down
 docker compose up -d
 ```
 
-### Observation
+Compose removed the API and PostgreSQL containers and the network, while the named volume remained.
 
-```text
-root@ip-10-0-12-83:/home/ubuntu/01-application-stack# docker compose down
-[+] down 3/3
- ✔ Container 01-application-stack-api-1      Removed                                                                                                                           10.2s
- ✔ Container 01-application-stack-postgres-1 Removed                                                                                                                            0.2s
- ✔ Network 01-application-stack_default      Removed                                                                                                                            0.0s
-root@ip-10-0-12-83:/home/ubuntu/01-application-stack# docker compose up -d
-[+] up 3/3
- ✔ Network 01-application-stack_default      Created                                                                                                                            0.1s
- ✔ Container 01-application-stack-postgres-1 Healthy                                                                                                                            5.9s
- ✔ Container 01-application-stack-api-1      Started                                                                                                                            6.1s
-```
+The stack started successfully again.
 
-### Conclusion
+### Finding
 
-The PostgreSQL container can be removed and recreated while the named volume remains available.
+Container lifecycle and persistent-data lifecycle are separate.
 
-This demonstrates the difference between container lifecycle and persistent data lifecycle.
+Removing and recreating the PostgreSQL container did not inherently remove the database volume.
 
 ---
 
-## Experiment 7 — Volume Deletion
+## 7. Volume Deletion
 
-### Steps
+I then deliberately removed the volume:
 
 ```bash
 docker compose down -v
 docker compose up -d
 ```
 
-### Observation
+Compose reported that the named volume was removed and subsequently created a new one during startup.
 
-```text
-[+] down 4/4
- ✔ Container 01-application-stack-api-1      Removed                                                                                                                           10.2s
- ✔ Container 01-application-stack-postgres-1 Removed                                                                                                                            0.2s
- ✔ Network 01-application-stack_default      Removed                                                                                                                            0.1s
- ✔ Volume 01-application-stack_postgres_data Removed                                                                                                                            0.1s
-root@ip-10-0-12-83:/home/ubuntu/01-application-stack# docker compose up -d
-[+] up 4/4
- ✔ Network 01-application-stack_default      Created                                                                                                                            0.1s
- ✔ Volume 01-application-stack_postgres_data Created                                                                                                                            0.0s
- ✔ Container 01-application-stack-postgres-1 Healthy                                                                                                                            5.9s
- ✔ Container 01-application-stack-api-1      Started                                                                                                                            6.0s
-```
+### Finding
 
-### Conclusion
-
-Removing the named volume removes the persistent PostgreSQL data associated with the lab.
-
-This demonstrated why:
+The distinction between:
 
 ```bash
 docker compose down
@@ -556,11 +400,17 @@ and:
 docker compose down -v
 ```
 
-must not be treated as equivalent operations when persistent data is involved.
+is operationally important.
+
+The first removes the application containers and network while retaining the named volume.
+
+The second also removes the named volume and therefore destroys the persisted database data.
+
+This is a critical distinction for any Compose workload containing stateful services.
 
 ---
 
-# Service Dependency Investigation
+# Startup Dependency Investigation
 
 The API uses:
 
@@ -570,119 +420,57 @@ depends_on:
     condition: service_healthy
 ```
 
-PostgreSQL has its own healthcheck.
+PostgreSQL has a healthcheck based on `pg_isready`.
 
-The purpose is to avoid treating "container started" as equivalent to "database ready."
+I intentionally observed the startup process rather than assuming that `depends_on` meant "database is ready."
 
----
-
-## Experiment 8 — Startup Dependency
-
-### Command
-
-```bash
-docker compose up
-```
-
-### Observation
+During startup, Compose showed:
 
 ```text
-[+] up 4/4
- ✔ Network 01-application-stack_default      Created                                                                                                                            0.1s
- ✔ Volume 01-application-stack_postgres_data Created                                                                                                                            0.0s
- ✔ Container 01-application-stack-postgres-1 Created                                                                                                                            0.1s
- ✔ Container 01-application-stack-api-1      Created                                                                                                                            0.1s
-Attaching to api-1, postgres-1
-Container 01-application-stack-postgres-1 Waiting 
-postgres-1  | The files belonging to this database system will be owned by user "postgres".
-postgres-1  | This user must also own the server process.
-postgres-1  | 
-postgres-1  | The database cluster will be initialized with locale "en_US.utf8".
-postgres-1  | The default database encoding has accordingly been set to "UTF8".
-postgres-1  | The default text search configuration will be set to "english".
-postgres-1  | 
-postgres-1  | Data page checksums are enabled.
-postgres-1  | 
-postgres-1  | fixing permissions on existing directory /var/lib/postgresql/18/docker ... ok
-postgres-1  | creating subdirectories ... ok
-postgres-1  | selecting dynamic shared memory implementation ... posix
-postgres-1  | selecting default "max_connections" ... 100
-postgres-1  | selecting default "shared_buffers" ... 128MB
-postgres-1  | selecting default time zone ... UTC
-postgres-1  | creating configuration files ... ok
-postgres-1  | running bootstrap script ... ok
-postgres-1  | sh: locale: not found
-postgres-1  | 2026-08-11 14:05:04.139 UTC [38] WARNING:  no usable system locales were found
-postgres-1  | performing post-bootstrap initialization ... ok
-postgres-1  | syncing data to disk ... ok
-postgres-1  | 
-postgres-1  | initdb: warning: enabling "trust" authentication for local connections
-postgres-1  | 
-postgres-1  | Success. You can now start the database server using:
-postgres-1  | 
-postgres-1  |     pg_ctl -D /var/lib/postgresql/18/docker -l logfile start
-postgres-1  | 
-postgres-1  | initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
-postgres-1  | waiting for server to start....2026-08-11 14:05:04.745 UTC [44] LOG:  starting PostgreSQL 18.4 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
-postgres-1  | 2026-08-11 14:05:04.748 UTC [44] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
-postgres-1  | 2026-08-11 14:05:04.758 UTC [50] LOG:  database system was shut down at 2026-08-11 14:05:04 UTC
-postgres-1  | 2026-08-11 14:05:04.763 UTC [44] LOG:  database system is ready to accept connections
-postgres-1  |  done
-postgres-1  | server started
-postgres-1  | CREATE DATABASE
-postgres-1  | 
-postgres-1  | 
-postgres-1  | /usr/local/bin/docker-entrypoint.sh: ignoring /docker-entrypoint-initdb.d/*
-postgres-1  | 
-postgres-1  | 2026-08-11 14:05:04.908 UTC [44] LOG:  received fast shutdown request
-postgres-1  | waiting for server to shut down....2026-08-11 14:05:04.912 UTC [44] LOG:  aborting any active transactions
-postgres-1  | 2026-08-11 14:05:04.919 UTC [44] LOG:  background worker "logical replication launcher" (PID 53) exited with exit code 1
-postgres-1  | 2026-08-11 14:05:04.921 UTC [48] LOG:  shutting down
-postgres-1  | 2026-08-11 14:05:04.925 UTC [48] LOG:  checkpoint starting: shutdown immediate
-postgres-1  | 2026-08-11 14:05:04.971 UTC [48] LOG:  checkpoint complete: wrote 943 buffers (5.8%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.025 s, sync=0.012 s, total=0.049 s; sync files=303, longest=0.005 s, average=0.001 s; distance=4362 kB, estimate=4362 kB; lsn=0/1BA6828, redo lsn=0/1BA6828
-postgres-1  | 2026-08-11 14:05:04.989 UTC [44] LOG:  database system is shut down
-postgres-1  |  done
-postgres-1  | server stopped
-postgres-1  | 
-postgres-1  | PostgreSQL init process complete; ready for start up.
-postgres-1  | 
-postgres-1  | 2026-08-11 14:05:05.040 UTC [1] LOG:  starting PostgreSQL 18.4 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
-postgres-1  | 2026-08-11 14:05:05.042 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
-postgres-1  | 2026-08-11 14:05:05.042 UTC [1] LOG:  listening on IPv6 address "::", port 5432
-postgres-1  | 2026-08-11 14:05:05.045 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
-postgres-1  | 2026-08-11 14:05:05.052 UTC [66] LOG:  database system was shut down at 2026-08-11 14:05:04 UTC
-postgres-1  | 2026-08-11 14:05:05.058 UTC [1] LOG:  database system is ready to accept connections
-Container 01-application-stack-postgres-1 Healthy 
-api-1       | API listening on port 3000
+Container 01-application-stack-postgres-1 Waiting
 ```
 
-### Evidence
+PostgreSQL initialized and eventually reported:
 
-```bash
-docker compose ps
+```text
+database system is ready to accept connections
 ```
 
-and:
+Compose then reported:
 
-```bash
-docker compose logs postgres
+```text
+Container 01-application-stack-postgres-1 Healthy
 ```
 
-### Conclusion
+and the API started:
 
-The API depends on PostgreSQL being healthy before its dependency condition is satisfied.
+```text
+api-1 | API listening on port 3000
+```
 
-This demonstrated the difference between:
+### Finding
+
+The important distinction is:
 
 ```text
 Container started
 ```
 
-and:
+versus:
 
 ```text
-Application dependency ready
+Dependency is healthy
 ```
+
+Using:
+
+```yaml
+condition: service_healthy
+```
+
+made the API dependent on PostgreSQL's health status rather than merely its container startup.
+
+This is consistent with Docker's current Compose behavior: `service_healthy` causes Compose to wait for the dependency's healthcheck to pass before starting the dependent service.
 
 ---
 
@@ -690,7 +478,9 @@ Application dependency ready
 
 ## PostgreSQL 18 Startup Failure
 
-The initial implementation of the lab used:
+The first implementation of the lab did not start successfully.
+
+I initially configured:
 
 ```yaml
 postgres:
@@ -699,8 +489,6 @@ postgres:
     - postgres_data:/var/lib/postgresql/data
 ```
 
-The application did not start successfully.
-
 Compose reported:
 
 ```text
@@ -708,24 +496,30 @@ dependency failed to start:
 container 01-application-stack-postgres-1 is unhealthy
 ```
 
+At first this looked like a healthcheck problem.
+
+I did not immediately change the healthcheck.
+
+Instead, I investigated the PostgreSQL container.
+
 ---
 
-## Initial Evidence
+## Evidence
 
-The PostgreSQL container was inspected with:
+I inspected the PostgreSQL logs:
 
 ```bash
 docker compose logs postgres
 ```
 
-and:
+and inspected the container state:
 
 ```bash
 docker inspect 01-application-stack-postgres-1 \
   --format 'Status={{.State.Status}} ExitCode={{.State.ExitCode}} Error={{.State.Error}}'
 ```
 
-The observed container state showed:
+The container was repeatedly restarting with:
 
 ```text
 Status=restarting
@@ -738,41 +532,47 @@ The PostgreSQL logs indicated that data was present under:
 /var/lib/postgresql/data
 ```
 
-but this was treated as an unused legacy mount by the PostgreSQL 18 image.
+but PostgreSQL 18 treated that location as an unused legacy mount.
+
+This changed the direction of the investigation.
+
+The problem was not that the healthcheck was incorrectly detecting an unhealthy PostgreSQL server.
+
+PostgreSQL itself was failing before it could become healthy.
 
 ---
 
 ## Root Cause
 
-The initial Compose configuration used the traditional PostgreSQL data path:
+The initial configuration used the traditional PostgreSQL data path:
 
 ```text
 /var/lib/postgresql/data
 ```
 
-However, the PostgreSQL 18 official image changed its data-directory and volume layout.
+However, the PostgreSQL 18 official image changed its data-directory layout.
 
-The image uses a version-specific `PGDATA` location under:
+The image defines:
 
 ```text
-/var/lib/postgresql/18/docker
+PGDATA=/var/lib/postgresql/18/docker
 ```
 
 and declares:
 
 ```text
-/var/lib/postgresql
+VOLUME /var/lib/postgresql
 ```
 
-as its volume.
+for PostgreSQL 18.
 
 Therefore, the original volume mount was incompatible with the PostgreSQL 18 image layout.
 
 ---
 
-## Fix
+## Resolution
 
-The volume mount was changed from:
+I changed the volume mount from:
 
 ```yaml
 volumes:
@@ -786,238 +586,188 @@ volumes:
   - postgres_data:/var/lib/postgresql
 ```
 
-The stack was then recreated and tested again.
+I then recreated the stack and verified the application again.
 
 ---
 
 ## Verification After the Fix
 
-### Compose startup
-
-```bash
-docker compose up --build -d
-```
-
-Result:
+The rebuilt stack reported:
 
 ```text
-[+] Building 0.6s (12/12) FINISHED                                                                                                                                                  
- => [internal] load local bake definitions                                                                                                                                     0.0s
- => => reading from stdin 532B                                                                                                                                                 0.0s
- => [internal] load build definition from Dockerfile                                                                                                                           0.0s
- => => transferring dockerfile: 200B                                                                                                                                           0.0s
- => [internal] load metadata for docker.io/library/node:22-alpine                                                                                                              0.2s
- => [internal] load .dockerignore                                                                                                                                              0.0s
- => => transferring context: 2B                                                                                                                                                0.0s
- => [1/5] FROM docker.io/library/node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32                                                        0.0s
- => => resolve docker.io/library/node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32                                                        0.0s
- => [internal] load build context                                                                                                                                              0.1s
- => => transferring context: 136B                                                                                                                                              0.1s
- => CACHED [2/5] WORKDIR /app                                                                                                                                                  0.0s
- => CACHED [3/5] COPY app/package*.json ./                                                                                                                                     0.0s
- => CACHED [4/5] RUN npm ci --omit=dev                                                                                                                                         0.0s
- => CACHED [5/5] COPY app/server.js ./                                                                                                                                         0.0s
- => exporting to image                                                                                                                                                         0.1s
- => => exporting layers                                                                                                                                                        0.0s
- => => exporting manifest sha256:a1a268871a8fe43b82a95786365b8f041aaad16d18b93e9943b20340b809c1df                                                                              0.0s
- => => exporting config sha256:c4129895bdda2dacf0c74dcd6b2b13de24eef6c4145852bc69dddece0c53f1a6                                                                                0.0s
- => => exporting attestation manifest sha256:785ff073d5f8e553eff238e771294eeb4d28f96b324dfa9518d85b63b1fdced1                                                                  0.0s
- => => exporting manifest list sha256:ecc98d275498c5579ec90d62778983c181b77f9bd1fbde58ddd8cbd84b79f651                                                                         0.0s
- => => naming to docker.io/library/01-application-stack-api:latest                                                                                                             0.0s
- => => unpacking to docker.io/library/01-application-stack-api:latest                                                                                                          0.0s
- => resolving provenance for metadata file                                                                                                                                     0.0s
-[+] up 5/5
- ✔ Image 01-application-stack-api            Built                                                                                                                              0.7s
- ✔ Network 01-application-stack_default      Created                                                                                                                            0.1s
- ✔ Volume 01-application-stack_postgres_data Created                                                                                                                            0.0s
- ✔ Container 01-application-stack-postgres-1 Healthy                                                                                                                            5.9s
- ✔ Container 01-application-stack-api-1      Started                                                                                                                            6.1s
+✔ Image 01-application-stack-api Built
+✔ Network 01-application-stack_default Created
+✔ Volume 01-application-stack_postgres_data Created
+✔ Container 01-application-stack-postgres-1 Healthy
+✔ Container 01-application-stack-api-1 Started
 ```
 
-### Service status
-
-```bash
-docker compose ps
-```
-
-Result:
+The final service state was:
 
 ```text
-NAME                              IMAGE                      COMMAND                  SERVICE    CREATED          STATUS                    PORTS
-01-application-stack-api-1        01-application-stack-api   "docker-entrypoint.s…"   api        46 seconds ago   Up 39 seconds (healthy)   0.0.0.0:8080->3000/tcp, [::]:8080->3000/tcp
-01-application-stack-postgres-1   postgres:18-alpine         "docker-entrypoint.s…"   postgres   46 seconds ago   Up 45 seconds (healthy)   5432/tcp
+NAME                              SERVICE    STATUS
+01-application-stack-api-1        api        Up (healthy)
+01-application-stack-postgres-1   postgres   Up (healthy)
 ```
 
-### API health
+The API health endpoint returned:
 
-```bash
-curl http://localhost:8080/health
-```
-
-Result:
-
-```text
+```json
 {"status":"healthy","database":"reachable"}
 ```
 
-### Database connectivity
+The database endpoint returned:
 
-```bash
-curl http://localhost:8080/db
+```json
+{
+  "status":"connected",
+  "database":"compose_lab",
+  "server_time":"2026-08-11T14:09:12.637Z"
+}
 ```
 
-Result:
+### Finding
 
-```text
-{"status":"connected","database":"compose_lab","server_time":"2026-08-11T14:09:12.637Z"}
-```
-
----
-
-# Production Implication
-
-The failure demonstrated an important production lesson:
-
-> A database image major-version upgrade is not necessarily a simple image-tag change.
-
-Before upgrading a stateful service, I need to verify:
-
-* image documentation
-* data-directory layout
-* volume layout
-* initialization behavior
-* upgrade/migration requirements
-* backup and restore procedure
-* compatibility with the existing persistent data
-* rollback strategy
-
-The PostgreSQL 18 image change made this visible immediately during the lab.
-
-This is particularly important for persistent services because a container image can change filesystem assumptions while the underlying persistent data survives independently.
+The failure was caused by an image-version-specific filesystem change rather than a Compose dependency or healthcheck problem.
 
 ---
 
 # Troubleshooting Approach
 
-The main troubleshooting sequence used in this failure was:
+This failure reinforced the following troubleshooting sequence:
 
 ```text
-Compose reports dependency failure
-            |
-            v
+Compose reports failure
+        |
+        v
 Identify affected service
-            |
-            v
-Inspect service logs
-            |
-            v
+        |
+        v
+Inspect logs
+        |
+        v
 Inspect container state
-            |
-            v
-Determine whether failure is:
+        |
+        v
+Determine whether the failure is:
 startup / healthcheck / dependency
-            |
-            v
+        |
+        v
 Identify root cause
-            |
-            v
-Change only the required configuration
-            |
-            v
-Rebuild/recreate
-            |
-            v
+        |
+        v
+Change the minimum required configuration
+        |
+        v
+Recreate the affected resources
+        |
+        v
 Verify application behavior
 ```
 
-The important lesson was to avoid changing multiple configuration items before establishing the root cause.
+The most important lesson was to avoid treating the final Compose error message as the root cause.
+
+In this case:
+
+```text
+container is unhealthy
+```
+
+was only the symptom.
+
+The actual failure was PostgreSQL terminating because of the incompatible volume layout.
 
 ---
 
 # Key Findings
 
-## 1. Compose is an application definition
+### Compose configuration is an application model
 
-Instead of manually creating each container with separate `docker run` commands, Compose allows the application topology to be declared in one YAML configuration.
+I can represent the application topology in one YAML file instead of managing each container independently.
 
----
+The important shift is from thinking about individual containers to thinking about the desired state of the application.
 
-## 2. Services communicate using service names
+### YAML structure maps directly to the application model
 
-The API connects to PostgreSQL using:
+The indentation and nesting of YAML determine the relationship between:
+
+```text
+services
+  |
+  +-- api
+  |
+  +-- postgres
+```
+
+and the configuration belonging to each service.
+
+This made the YAML much easier to reason about than memorizing individual Compose keys.
+
+### Service names are more important than container IPs
+
+The API communicates with PostgreSQL using:
 
 ```text
 postgres
 ```
 
-rather than a hard-coded container IP.
+rather than a hard-coded IP address.
 
-This avoids coupling the application to dynamically assigned container addresses.
+That keeps the application independent from dynamically assigned container addresses.
 
----
+### Healthchecks provide application-level readiness
 
-## 3. Container health and container existence are different
+A running container does not necessarily mean its application is ready.
 
-A container being started does not necessarily mean the application inside it is ready.
+The PostgreSQL healthcheck allowed Compose to distinguish between PostgreSQL being started and PostgreSQL being ready to accept connections.
 
-Healthchecks allow the service's operational state to be represented explicitly.
+### `depends_on` does not automatically mean "ready"
 
----
+The `service_healthy` condition was required to make the API wait for PostgreSQL's healthcheck.
 
-## 4. `depends_on` has different behavior depending on its syntax
+This was different from simply declaring a dependency.
 
-Simple dependency ordering does not mean that a dependency is healthy.
+### Volumes have an independent lifecycle
 
-Using:
+Containers can be removed and recreated while a named volume survives.
 
-```yaml
-depends_on:
-  postgres:
-    condition: service_healthy
+Using `down -v` changes that behavior by explicitly deleting the volume.
+
+### Database image upgrades require investigation
+
+The PostgreSQL 18 failure was the most valuable troubleshooting finding in this lab.
+
+Changing:
+
+```text
+postgres:<previous-version>
 ```
 
-allows the dependency to be considered ready based on its healthcheck.
+to:
 
----
-
-## 5. Named volumes separate data lifecycle from container lifecycle
-
-The PostgreSQL container can be recreated without necessarily deleting its persistent data.
-
-However:
-
-```bash
-docker compose down -v
+```text
+postgres:18
 ```
 
-removes the named volume and therefore destroys the persisted lab data.
+is not necessarily a harmless configuration change when persistent storage is involved.
 
----
-
-## 6. Database image upgrades require investigation
-
-The PostgreSQL 18 volume-layout change caused the initial implementation to fail.
-
-This demonstrated that version upgrades of stateful services require more than changing an image tag.
+The image's filesystem and data-directory behavior must be verified before performing a database major-version upgrade.
 
 ---
 
 # Production Considerations
 
-This lab is intentionally a small single-host Compose deployment.
+This lab intentionally represents a small single-host Compose deployment rather than a complete production platform.
 
-It is **not** being presented as a production-ready database platform.
+I identified the following areas that require additional engineering before treating this as production-ready:
 
-The following production concerns are intentionally left for later labs:
-
-* proper secret management
+* secret management
 * environment-specific configuration
 * production Compose overrides
 * image digest pinning
 * image vulnerability scanning
-* container resource limits
-* read-only filesystem considerations
-* capability reduction
+* resource limits
+* filesystem and capability hardening
 * centralized logging
 * monitoring and metrics
 * TLS
@@ -1028,54 +778,125 @@ The following production concerns are intentionally left for later labs:
 * high availability
 * CI/CD integration
 
-These will be addressed progressively rather than adding unnecessary complexity to the first lab.
+I will address these progressively rather than adding production complexity before understanding the underlying Compose mechanisms.
 
 ---
 
 # What I Learned
 
-[Write this section in my own words after completing the lab.]
+This lab changed how I think about writing a Compose file.
 
-Suggested areas to reflect on:
+I started with the application architecture:
 
-* How I translate an application architecture into `compose.yaml`
-* How YAML nesting maps to Compose structure
-* How services communicate inside a Compose network
-* Why service names should be used instead of container IP addresses
-* Why healthchecks matter
-* How `depends_on` interacts with healthchecks
-* How named volumes preserve data
-* Why `docker compose down` and `docker compose down -v` have different consequences
-* What caused the PostgreSQL 18 failure
-* What I should verify before upgrading a stateful container image
+```text
+API
+ |
+PostgreSQL
+```
+
+and translated that into:
+
+```text
+services
+├── api
+└── postgres
+```
+
+From there, each runtime requirement became a specific part of the Compose configuration:
+
+```text
+Application needs to be built
+        -> build
+
+Application must be reachable externally
+        -> ports
+
+Application needs PostgreSQL configuration
+        -> environment
+
+Application depends on PostgreSQL
+        -> depends_on
+
+PostgreSQL must be ready before API startup
+        -> healthcheck + service_healthy
+
+Database data must survive container recreation
+        -> named volume
+
+Containers need to communicate
+        -> Compose network
+```
+
+The biggest learning was that I do not need to start by remembering every Compose keyword.
+
+I can start from the architecture and derive the YAML from the application's requirements.
+
+The PostgreSQL failure also reinforced an important production habit: when a container fails, I should investigate the actual runtime evidence before changing configuration. The Compose message identified the dependency failure, but the PostgreSQL logs revealed the real cause.
 
 ---
 
-# Conclusions
+# Conclusion
 
-[Write my actual conclusions based on the experiments.]
+This lab gave me the foundation I need to write a Compose file from an application architecture rather than copy an existing template.
 
-The conclusion should focus on what the experiments demonstrated rather than repeating the implementation steps.
+I now understand the relationship between:
+
+```text
+YAML structure
+      ↓
+Compose services
+      ↓
+Networks
+      ↓
+Dependencies
+      ↓
+Health
+      ↓
+Persistent storage
+      ↓
+Container lifecycle
+```
+
+The most valuable part of the lab was the PostgreSQL 18 failure because it forced me to distinguish between a Compose-level symptom and the actual application failure.
+
+The final implementation successfully demonstrated:
+
+* multi-service Compose configuration
+* application image building
+* PostgreSQL image usage
+* service discovery
+* port publishing
+* environment-based configuration
+* healthchecks
+* health-aware dependencies
+* persistent volumes
+* container recreation
+* volume deletion
+* runtime troubleshooting
+
+I am treating this lab as the baseline for the more production-oriented Compose work that follows.
 
 ---
 
 # Remaining Questions
 
-* How should secrets be managed properly in Docker Compose?
-* How should development and production Compose configurations be separated?
-* How should Compose networks be designed for a larger application?
-* How should resource limits be selected?
-* How should logging and monitoring be integrated?
-* How should database backup and restore be handled?
-* How should Compose deployments be integrated into CI/CD?
-* Where does Docker Compose stop being appropriate and an orchestrator become necessary?
+The next areas I need to investigate are:
+
+* How should secrets be handled without exposing credentials through Compose configuration?
+* How should development and production configurations be separated cleanly?
+* How should multiple Compose networks be designed to isolate application tiers?
+* How should resource limits and container security controls be applied?
+* How should Compose applications be integrated into CI/CD?
+* How should logging and monitoring be designed?
+* How should database backup, restore, and upgrade procedures be incorporated?
+* At what point does a Compose workload become unsuitable for a single-host deployment and require an orchestrator?
 
 ---
 
 # References
 
-* Docker Compose Specification
-* Docker Compose service reference
-* Docker Compose healthcheck and dependency documentation
-* Docker official PostgreSQL image documentation
-* GitHub repository and security documentation
+* [Docker Compose Specification](https://docs.docker.com/reference/compose-file/)
+* [Docker Compose Services Reference](https://docs.docker.com/reference/compose-file/services/)
+* [Docker Compose Quickstart](https://docs.docker.com/compose/gettingstarted/)
+* [Docker Official PostgreSQL Image](https://hub.docker.com/_/postgres)
+* [GitHub README Documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-readmes)
