@@ -1,4 +1,4 @@
-# 01 — Application Stack
+# 01 — Compose Application Fundamentals
 
 ## Objective
 
